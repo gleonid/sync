@@ -6,7 +6,10 @@
 // mechanism.
 package singleflight // import "golang.org/x/sync/singleflight"
 
-import "sync"
+import (
+	"sync"
+	"sync/atomic"
+)
 
 // call is an in-flight or completed singleflight.Do call
 type call struct {
@@ -41,6 +44,46 @@ type Result struct {
 	Val    interface{}
 	Err    error
 	Shared bool
+}
+
+type RefCounter struct {
+	ptr  *int64
+	zero int64
+}
+
+// Decrement method decrements reference counter returned by DoRefCount
+// The return value is true when last caller executes Decrement
+func (v RefCounter) Decrement() bool {
+	return atomic.AddInt64(v.ptr, -1) == v.zero
+}
+
+// DoRefCount executes and returns the results of the given function, making
+// sure that only one execution is in-flight for a given key at a
+// time. If a duplicate comes in, the duplicate caller waits for the
+// original to complete and receives the same results.
+// DoRefCount should NOT be mixed for same key with Do/DoChan to avoid race condition in calulating "shared" retiun value
+// The return value refCount maintains "reference counter" for multiple callers.
+func (g *Group) DoRefCount(key string, fn func() (interface{}, error)) (v interface{}, err error, refCount RefCounter) {
+	g.mu.Lock()
+	if g.m == nil {
+		g.m = make(map[string]*call)
+	}
+	if c, ok := g.m[key]; ok {
+		c.dups++
+		g.mu.Unlock()
+		c.wg.Wait()
+		return c.val, c.err, RefCounter{ptr: &c.dups, zero: -1}
+	}
+	c := new(call)
+	c.wg.Add(1)
+	g.m[key] = c
+	g.mu.Unlock()
+
+	g.doCall(c, key, fn)
+
+	// use -1 instead of 0 because call.dups is initialized with 0,
+	// in other words: for single caller RefCounter will hold value of 0
+	return c.val, c.err, RefCounter{ptr: &c.dups, zero: -1}
 }
 
 // Do executes and returns the results of the given function, making

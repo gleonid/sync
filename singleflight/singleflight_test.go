@@ -13,6 +13,60 @@ import (
 	"time"
 )
 
+func TestDoRefCount(t *testing.T) {
+	var g Group
+	v, err, ref := g.DoRefCount("key", func() (interface{}, error) {
+		return "bar", nil
+	})
+	if got, want := fmt.Sprintf("%v (%T)", v, v), "bar (string)"; got != want {
+		t.Errorf(".int64Do = %v; want %v", got, want)
+	}
+	if err != nil {
+		t.Errorf("Do error = %v", err)
+	}
+	if !ref.Decrement() {
+		t.Errorf("expect ref counter to hold '1'")
+	}
+	if ref.Decrement() {
+		t.Errorf("second Decrement call is expected to return false")
+	}
+}
+
+func TestMultipleDoRefCount(t *testing.T) {
+	var g Group
+
+	slowFunctor := func() (interface{}, error) {
+		time.Sleep(200 * time.Millisecond) // let more goroutines enter Do
+		return "bar", nil
+	}
+
+	var wg, wgGoroutines sync.WaitGroup
+	const callers = 4
+	ref := make([]RefCounter, callers)
+	wgGoroutines.Add(callers)
+
+	for i := 0; i < callers; i++ {
+		wg.Add(1)
+		go func(index int) {
+			wgGoroutines.Done()
+			wgGoroutines.Wait() // ensure that all goroutines started and reached this point
+
+			_, _, ref[index] = g.DoRefCount("key", slowFunctor)
+			wg.Done()
+		}(i)
+	}
+	wg.Wait()
+
+	for i := 0; i < callers-1; i++ {
+		if ref[i].Decrement() {
+			t.Errorf("Decrement call is expected to return false")
+		}
+	}
+	if !ref[callers-1].Decrement() {
+		t.Errorf("last ref counter.Decrement expected to return true")
+	}
+}
+
 func TestDo(t *testing.T) {
 	var g Group
 	v, err, _ := g.Do("key", func() (interface{}, error) {
