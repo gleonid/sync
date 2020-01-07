@@ -64,22 +64,7 @@ func (v RefCounter) Decrement() bool {
 // DoRefCount should NOT be mixed for same key with Do/DoChan to avoid race condition in calulating "shared" retiun value
 // The return value refCount maintains "reference counter" for multiple callers.
 func (g *Group) DoRefCount(key string, fn func() (interface{}, error)) (v interface{}, err error, refCount RefCounter) {
-	g.mu.Lock()
-	if g.m == nil {
-		g.m = make(map[string]*call)
-	}
-	if c, ok := g.m[key]; ok {
-		c.dups++
-		g.mu.Unlock()
-		c.wg.Wait()
-		return c.val, c.err, RefCounter{ptr: &c.dups, zero: -1}
-	}
-	c := new(call)
-	c.wg.Add(1)
-	g.m[key] = c
-	g.mu.Unlock()
-
-	g.doCall(c, key, fn)
+	c := g.doNoChan(key, fn)
 
 	// use -1 instead of 0 because call.dups is initialized with 0,
 	// in other words: for single caller RefCounter will hold value of 0
@@ -92,6 +77,11 @@ func (g *Group) DoRefCount(key string, fn func() (interface{}, error)) (v interf
 // original to complete and receives the same results.
 // The return value shared indicates whether v was given to multiple callers.
 func (g *Group) Do(key string, fn func() (interface{}, error)) (v interface{}, err error, shared bool) {
+	c := g.doNoChan(key, fn)
+	return c.val, c.err, c.dups > 0
+}
+
+func (g *Group) doNoChan(key string, fn func() (interface{}, error)) *call {
 	g.mu.Lock()
 	if g.m == nil {
 		g.m = make(map[string]*call)
@@ -100,7 +90,7 @@ func (g *Group) Do(key string, fn func() (interface{}, error)) (v interface{}, e
 		c.dups++
 		g.mu.Unlock()
 		c.wg.Wait()
-		return c.val, c.err, true
+		return c
 	}
 	c := new(call)
 	c.wg.Add(1)
@@ -108,7 +98,7 @@ func (g *Group) Do(key string, fn func() (interface{}, error)) (v interface{}, e
 	g.mu.Unlock()
 
 	g.doCall(c, key, fn)
-	return c.val, c.err, c.dups > 0
+	return c
 }
 
 // DoChan is like Do but returns a channel that will receive the
