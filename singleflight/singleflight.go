@@ -46,6 +46,9 @@ type Result struct {
 	Shared bool
 }
 
+// RefCounter is retuned by Group.DoRefCount and contains information on how many callers got same return result
+/// Each caller to execute RefCounter.Decrement method, once done using resource returned by 'Group.DoRefCount'.
+// 'RefCounter.Decrement' for last caller will return true, at which point resource cleanup can be carried out
 type RefCounter struct {
 	ptr  *int64
 	zero int64
@@ -61,8 +64,10 @@ func (v RefCounter) Decrement() bool {
 // sure that only one execution is in-flight for a given key at a
 // time. If a duplicate comes in, the duplicate caller waits for the
 // original to complete and receives the same results.
-// DoRefCount should NOT be mixed for same key with Do/DoChan to avoid race condition in calulating "shared" retiun value
+// DoRefCount should NOT be mixed for same key with Do/DoChan to avoid race condition in calculating "shared" return value
 // The return value refCount maintains "reference counter" for multiple callers.
+// Each caller to execute 'RefCounter.Decrement' method, once done using returned resource.
+// 'RefCounter.Decrement' for last caller will return true, at which point resource cleanup can be carried out
 func (g *Group) DoRefCount(key string, fn func() (interface{}, error)) (v interface{}, err error, refCount RefCounter) {
 	c := g.doNoChan(key, fn)
 
